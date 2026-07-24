@@ -11,20 +11,17 @@ services:
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-    expose:
-      - "3000"
+    ports:
+      - "3000:3000"
     depends_on:
-      loki:
-        condition: service_healthy
-      tempo:
-        condition: service_healthy
-      prometheus:
-        condition: service_healthy
+      - loki
+      - tempo
+      - prometheus
     networks:
       - monitoring
+    # Matches grafana/alloy example: curl + /healthz
     healthcheck:
-      test:
-        ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/healthz"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -41,12 +38,7 @@ services:
       - "3100"
     networks:
       - monitoring
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3100/ready || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
+    # No healthcheck: distroless (no shell/wget), same as grafana/alloy example.
 
   tempo:
     image: grafana/tempo:2.9.4
@@ -61,12 +53,7 @@ services:
       - "4318" # OTLP HTTP (internal, from Alloy)
     networks:
       - monitoring
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3200/ready || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
+    # No healthcheck: distroless (no shell/wget), same as grafana/alloy example.
 
   prometheus:
     image: prom/prometheus:v3.13.1
@@ -92,37 +79,30 @@ services:
       start_period: 15s
 
   alloy:
-    image: grafana/alloy:v1.18.5
+    image: grafana/alloy:v1.18.0
     restart: unless-stopped
-    command:
-      - run
-      - /etc/alloy/config.alloy
-      - --storage.path=/var/lib/alloy/data
-      - --server.http.listen-addr=0.0.0.0:12345
-      - --stability.level=generally-available
+    entrypoint: ["/bin/sh", "/etc/alloy/alloy-entrypoint.sh"]
+    environment:
+      OTLP_TENANTS: ${OTLP_TENANTS:?set OTLP_TENANTS e.g. acme:secret1,beta:secret2}
+      OTLP_HTPASSWD_FILE: /tmp/otlp.htpasswd
     volumes:
       - ./config.alloy:/etc/alloy/config.alloy:ro
+      - ./scripts/alloy-entrypoint.sh:/etc/alloy/alloy-entrypoint.sh:ro
       - alloy-data:/var/lib/alloy/data
     expose:
       - "12345" # Alloy UI / metrics
       - "4317" # OTLP gRPC (apps → reverse proxy → Alloy)
       - "4318" # OTLP HTTP
     depends_on:
-      loki:
-        condition: service_healthy
-      tempo:
-        condition: service_healthy
       prometheus:
         condition: service_healthy
+      loki:
+        condition: service_started
+      tempo:
+        condition: service_started
     networks:
       - monitoring
-    healthcheck:
-      test:
-        ["CMD-SHELL", "wget -qO- http://localhost:12345/-/ready || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
+    # No healthcheck: matches grafana/alloy example (image has no wget/curl).
 
 volumes:
   grafana-data:

@@ -1,10 +1,69 @@
-// OTLP gateway: apps → Alloy → Prometheus / Loki / Tempo
+// OTLP gateway: apps → Alloy (Basic Auth) → Prometheus / Loki / Tempo
+// Basic Auth username (from OTLP_TENANTS) is forced as resource attribute "tenant".
+
+otelcol.auth.basic "otlp" {
+  htpasswd {
+    file = sys.env("OTLP_HTPASSWD_FILE")
+  }
+}
+
 otelcol.receiver.otlp "default" {
   grpc {
-    endpoint = "0.0.0.0:4317"
+    endpoint         = "0.0.0.0:4317"
+    include_metadata = true
+    auth             = otelcol.auth.basic.otlp.handler
   }
   http {
-    endpoint = "0.0.0.0:4318"
+    endpoint         = "0.0.0.0:4318"
+    include_metadata = true
+    auth             = otelcol.auth.basic.otlp.handler
+  }
+
+  output {
+    metrics = [otelcol.processor.attributes.tenant.input]
+    logs    = [otelcol.processor.attributes.tenant.input]
+    traces  = [otelcol.processor.attributes.tenant.input]
+  }
+}
+
+// Upsert tenant from Basic Auth username (overwrites client-supplied tenant).
+otelcol.processor.attributes "tenant" {
+  action {
+    key          = "tenant"
+    action       = "upsert"
+    from_context = "auth.username"
+  }
+
+  output {
+    metrics = [otelcol.processor.transform.tenant_resource.input]
+    logs    = [otelcol.processor.transform.tenant_resource.input]
+    traces  = [otelcol.processor.transform.tenant_resource.input]
+  }
+}
+
+// Promote signal attribute tenant → resource attribute (labels for Prom/Loki/Tempo).
+otelcol.processor.transform "tenant_resource" {
+  error_mode = "ignore"
+
+  metric_statements {
+    context = "datapoint"
+    statements = [
+      `set(resource.attributes["tenant"], datapoint.attributes["tenant"]) where datapoint.attributes["tenant"] != nil`,
+    ]
+  }
+
+  log_statements {
+    context = "log"
+    statements = [
+      `set(resource.attributes["tenant"], log.attributes["tenant"]) where log.attributes["tenant"] != nil`,
+    ]
+  }
+
+  trace_statements {
+    context = "span"
+    statements = [
+      `set(resource.attributes["tenant"], span.attributes["tenant"]) where span.attributes["tenant"] != nil`,
+    ]
   }
 
   output {
